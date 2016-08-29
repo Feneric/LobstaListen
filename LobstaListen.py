@@ -1,7 +1,12 @@
 #!/usr/bin/env python
 # -*- coding: utf-8 -*-
 """
-SeaHack: Store audio and additional information captured from the sea floor.
+LobstaListen: Store audio and additional information captured from the sea floor.
+
+This application is meant to run on a battery-powered Linux system like the C.H.I.P.
+or Raspberry Pi or Gizmo. This device needs a hydrophone hooked up to it to record
+sound underwater, a GPS device hooked up to it to record location, and a pressure
+sensor hooked up to it to record pressure.
 """
 
 from datetime import datetime
@@ -123,10 +128,14 @@ def storeSensorData(outFile):
     """
     sensorReading = randint(0, 65535)  # %FIXME% Obviously this needs to change for real HW
     packedSensorReading = pack('>H', sensorReading)
-    outFile.write(packedSensorReading)
+    try:
+        outFile.write(packedSensorReading)
+    except IOError as err:
+        syslog(LOG_ERR, "Error writing sensor data: {}".format(str(err)))
 
 # Things to do when this module is directly run.
 if __name__ == '__main__':
+    # Start by fetching command-line arguments and verifying consistency.
     args = parseArguments()
     if args.duration + 10 >= args.interval:
         print("The duration must be significantly larger than the interval.")
@@ -136,21 +145,28 @@ if __name__ == '__main__':
     syslog(LOG_INFO, startMsg)
     if args.verbose:
         print(startMsg)
+    # Move to the folder we want to save data to; this will normally be
+    # removable media for most effective sneakernet use.
     chdir(args.outputdir)
+    # Save GPS data (if available).
     try:
         gpsFile = open('Session-{}.txt'.format(datetime.now().isoformat()), 'w')
         gpsFile.write('Latitude: {} Longitude: {} Time: {}'.format(
             __gpsSession__.fix.latitude, __gpsSession__.fix.longitude, __gpsSession__.utc))
         gpsFile.close()
     except IOError as err:
-        syslog(LOG_ERR, "Error writing GPS file: {}".format(str(err)))
+        syslog(LOG_ERR, "Error saving GPS data: {}".format(str(err)))
+    # Open a file for saving sensor data.
     try:
         outFile = open('Sensor-{}.hex'.format(datetime.now().isoformat()), 'w')
     except IOError as err:
         syslog(LOG_ERR, "Error writing sensor data file: {}".format(str(err)))
+    # Set up a loop to record audio at the desired interval.
     __recordAudioLoop__ = LoopingCall(storeAudio, args.duration, args.verbose)
     __recordAudioLoop__.start(args.interval)
+    # Set up a loop to record sensor data.
     __recordDataLoop__ = LoopingCall(storeSensorData, outFile)
     __recordDataLoop__.start(__dataInterval__)
+    # Establish clean-up procedure and kick it off.
     reactor.addSystemEventTrigger('before', 'shutdown', cleanup, outFile)
     reactor.run()
